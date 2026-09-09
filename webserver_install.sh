@@ -7,7 +7,7 @@ echo "=== Atualizando as listas de pacotes ==="
 sudo apt update -y
 
 echo "=== Instalando o Nginx e PHP-FPM ==="
-sudo apt install -y nginx php-fpm
+sudo apt install php-fpm php-curl php-zip -y
 
 echo "=== Configurando o Vim como editor padrão no ambiente ==="
 if ! grep -q "export EDITOR=" ~/.bashrc; then
