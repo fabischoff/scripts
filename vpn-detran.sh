@@ -1,117 +1,21 @@
-#!/usr/bin/env bash
-#
-# configura-vpn-detran.sh
-# Instala e configura o StrongSwan (IPsec) para o túnel de teletrabalho
-# do Detran-RS (gateway Fortinet/Procergs), replicando a configuração
-# validada no manual oficial do FortiClient.
-#
-# Uso:
-#   sudo ./configura-vpn-detran.sh
-#
-# Testado em Kubuntu/Ubuntu 26.04.
+#!/bin/bash
+CONN=tunel-procergs
+DROP=/etc/systemd/resolved.conf.d/detran.conf
 
-set -euo pipefail
-
-# ---------------------------------------------------------------------------
-# Configurações — ajuste aqui se necessário
-# ---------------------------------------------------------------------------
-GATEWAY="vpn.procergs.com.br"
-LEFT_ID="detran"
-PSK="detran"
-XAUTH_USER="ti009632"
-XAUTH_PASS="d891g812"
-
-CONN_NAME="tunel-procergs"
-
-# ---------------------------------------------------------------------------
-# Checagem de root
-# ---------------------------------------------------------------------------
-if [[ "${EUID}" -ne 0 ]]; then
-    echo "Erro: execute este script com sudo/root." >&2
-    exit 1
-fi
-
-echo "==> Instalando StrongSwan e dependências..."
-apt update
-apt install -y strongswan strongswan-starter strongswan-pki \
-    libcharon-extra-plugins libstrongswan-extra-plugins
-
-# ---------------------------------------------------------------------------
-# Backup dos arquivos originais, se existirem e ainda não tiverem backup
-# ---------------------------------------------------------------------------
-for f in /etc/ipsec.conf /etc/ipsec.secrets; do
-    if [[ -f "$f" && ! -f "${f}.bak" ]]; then
-        cp "$f" "${f}.bak"
-        echo "==> Backup criado: ${f}.bak"
-    fi
-done
-
-# ---------------------------------------------------------------------------
-# /etc/ipsec.conf
-# ---------------------------------------------------------------------------
-echo "==> Escrevendo /etc/ipsec.conf..."
-cat > /etc/ipsec.conf <<EOF
-# ipsec.conf - gerado por configura-vpn-detran.sh
-
-config setup
-        # strictcrlpolicy=yes
-        # uniqueids = no
-
-conn ${CONN_NAME}
-    keyexchange=ikev1
-    aggressive=yes
-    authby=xauthpsk
-    xauth=client
-    xauth_identity=${XAUTH_USER}
-
-    left=%defaultroute
-    leftsourceip=%config
-    leftid=${LEFT_ID}
-
-    right=${GATEWAY}
-    rightid=%any
-    rightsubnet=0.0.0.0/0
-
-    ike=aes128-sha1-modp1536,aes256-sha256-modp1536!
-    esp=aes128-sha1-modp1536,aes256-sha256-modp1536!
-
-    ikelifetime=24h
-    keylife=8h
-    dpddelay=30
-    dpdtimeout=120
-    dpdaction=restart
-    keyingtries=1
-    forceencaps=yes
-
-    auto=add
-EOF
-
-# ---------------------------------------------------------------------------
-# /etc/ipsec.secrets
-# ---------------------------------------------------------------------------
-echo "==> Escrevendo /etc/ipsec.secrets..."
-cat > /etc/ipsec.secrets <<EOF
-: PSK "${PSK}"
-${XAUTH_USER} : XAUTH "${XAUTH_PASS}"
-EOF
-chmod 600 /etc/ipsec.secrets
-
-# ---------------------------------------------------------------------------
-# Recarregar e subir o túnel
-# ---------------------------------------------------------------------------
-echo "==> Recarregando configuração do StrongSwan..."
-ipsec restart
-sleep 2
-ipsec rereadall
-ipsec update
-
-echo "==> Tentando estabelecer o túnel '${CONN_NAME}'..."
-if ipsec up "${CONN_NAME}"; then
-    echo "==> Túnel estabelecido com sucesso!"
-    ipsec statusall
-else
-    echo "==> Falha ao subir o túnel. Verifique a saída acima ou rode:"
-    echo "      sudo ipsec up ${CONN_NAME}"
-    echo "    para ver o log detalhado da negociação."
-    exit 1
-fi
+case "$1" in
+  up)
+    sudo mkdir -p /etc/systemd/resolved.conf.d
+    printf '[Resolve]\nDNS=10.96.2.11 10.96.2.12\nDomains=~detran.reders\n' | sudo tee "$DROP" >/dev/null
+    sudo systemctl restart systemd-resolved
+    sudo ipsec up "$CONN"
+    sudo ip route del default table 220 2>/dev/null || true
+    sudo ipsec statusall
+    ;;
+  down)
+    sudo ipsec down "$CONN"
+    sudo rm -f "$DROP"
+    sudo systemctl restart systemd-resolved
+    ;;
+  *)
+    echo "uso: $0 up|down"; exit 1;;
+esac
